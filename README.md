@@ -47,3 +47,19 @@ const summary = await getSnowflakeConnection({
 ```
 
 When `logLevel` (or `SNOWFLAKE_LOG_LEVEL`) is set to `VERBOSE`, the helper includes a `debugLog` array that callers can print. At `MINIMAL`, it quietly returns just the summary so the consumer decides how much to display.
+
+### Running ad-hoc SQL
+
+```ts
+import { runSql } from '@marcelinojackson-org/snowflake-common';
+
+const result = await runSql('select current_user() as current_user', {
+  account: 'myaccount',
+  username: 'ME',
+  password: 'super-secret',
+  role: 'ACCOUNTADMIN'
+});
+
+console.log(result.rows); // [{ CURRENT_USER: 'ME' }]
+console.log(result.queryId); // Snowflake query id for easy lookup in QUERY_HISTORY
+```

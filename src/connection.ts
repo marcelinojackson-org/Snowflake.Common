@@ -19,6 +19,16 @@ interface ResolvedSnowflakeConnectionConfig {
   logLevel: LogLevel;
 }
 
+type ExtendedConnection = Connection & {
+  getId?: () => string;
+  getSessionState?: () => {
+    currentWarehouse?: string;
+    currentDatabase?: string;
+    currentSchema?: string;
+    currentRole?: string;
+  };
+};
+
 export interface SnowflakeConnectionResult {
   status: 'connected';
   connectionId: string;
@@ -101,7 +111,7 @@ type HealthCheck = {
   queryId: string;
 };
 
-function fetchHealth(connection: Connection, logLevel: LogLevel, debugLog: string[]): Promise<HealthCheck> {
+function fetchHealth(connection: ExtendedConnection, logLevel: LogLevel, debugLog: string[]): Promise<HealthCheck> {
   const SQL = 'select current_timestamp() as server_time, current_session() as session_id';
   if (logLevel === 'VERBOSE') {
     debugLog.push(`[VERBOSE] Executing SQL to fetch server timestamp and session id: ${SQL}`);
@@ -146,6 +156,20 @@ function fetchHealth(connection: Connection, logLevel: LogLevel, debugLog: strin
   });
 }
 
+function buildDefaultContext(connection: ExtendedConnection): SnowflakeConnectionResult['defaultContext'] {
+  const sessionState = typeof connection.getSessionState === 'function' ? connection.getSessionState() : undefined;
+  if (!sessionState) {
+    return undefined;
+  }
+
+  return {
+    warehouse: sessionState.currentWarehouse,
+    database: sessionState.currentDatabase,
+    schema: sessionState.currentSchema,
+    role: sessionState.currentRole
+  };
+}
+
 export async function getSnowflakeConnection(
   partialConfig: SnowflakeConnectionConfig = {}
 ): Promise<SnowflakeConnectionResult> {
@@ -172,14 +196,7 @@ export async function getSnowflakeConnection(
   }
 
   applySdkLogLevel(config.logLevel);
-  const connection = snowflake.createConnection(connectionOptions) as Connection & {
-    getSessionState?: () => {
-      currentWarehouse?: string;
-      currentDatabase?: string;
-      currentSchema?: string;
-      currentRole?: string;
-    };
-  };
+  const connection = snowflake.createConnection(connectionOptions) as ExtendedConnection;
 
   return new Promise((resolve, reject) => {
     connection.connect((err: SnowflakeError | undefined, conn: Connection | undefined) => {
@@ -191,15 +208,7 @@ export async function getSnowflakeConnection(
         return reject(err);
       }
 
-      const safeConnection = (conn || connection) as Connection & {
-        getId?: () => string;
-        getSessionState?: () => {
-          currentWarehouse?: string;
-          currentDatabase?: string;
-          currentSchema?: string;
-          currentRole?: string;
-        };
-      };
+      const safeConnection = (conn || connection) as ExtendedConnection;
       const connectionId = safeConnection.getId ? safeConnection.getId() : accountIdentifier;
 
       fetchHealth(safeConnection, config.logLevel, debugLog)
@@ -220,32 +229,83 @@ export async function getSnowflakeConnection(
             });
           }
 
-          const defaultContext = typeof safeConnection.getSessionState === 'function'
-            ? safeConnection.getSessionState()
-            : undefined;
-
           const summary: SnowflakeConnectionResult = {
             status: 'connected',
             connectionId,
             sessionId: health.sessionId,
             healthQueryId: health.queryId,
             serverDateTime: health.serverTime,
-            ...(defaultContext
-              ? {
-                  defaultContext: {
-                    warehouse: defaultContext.currentWarehouse,
-                    database: defaultContext.currentDatabase,
-                    schema: defaultContext.currentSchema,
-                    role: defaultContext.currentRole
-                  }
-                }
-              : {}),
+            ...(buildDefaultContext(safeConnection) ? { defaultContext: buildDefaultContext(safeConnection) } : {}),
             ...(verbose ? { debugLog } : {})
           };
 
           resolve(summary);
         })
         .catch((timeErr) => reject(timeErr));
+    });
+  });
+}
+
+export interface SnowflakeQueryResult {
+  queryId: string;
+  sessionId?: string;
+  sqlText: string;
+  rows: Array<Record<string, unknown>>;
+  rowCount: number;
+  defaultContext?: SnowflakeConnectionResult['defaultContext'];
+}
+
+export async function runSql(
+  sqlText: string,
+  partialConfig: SnowflakeConnectionConfig = {}
+): Promise<SnowflakeQueryResult> {
+  const config = resolveConfig(partialConfig);
+  const { identifier: accountIdentifier } = normalizeAccount(config.account);
+
+  const connectionOptions: ConnectionOptions = {
+    account: accountIdentifier,
+    username: config.username,
+    role: config.role,
+    ...(config.password ? { password: config.password } : {}),
+    ...(config.privateKeyPath ? { privateKeyPath: config.privateKeyPath } : {})
+  };
+
+  applySdkLogLevel(config.logLevel);
+  const connection = snowflake.createConnection(connectionOptions) as ExtendedConnection;
+
+  return new Promise((resolve, reject) => {
+    connection.connect((err: SnowflakeError | undefined, conn: Connection | undefined) => {
+      if (err) {
+        return reject(err);
+      }
+
+      const safeConnection = (conn || connection) as ExtendedConnection;
+
+      safeConnection.execute({
+        sqlText,
+        complete: (executeErr: SnowflakeError | undefined, stmt: any, rows?: Array<Record<string, unknown>>) => {
+          if (executeErr) {
+            safeConnection.destroy(() => reject(executeErr));
+            return;
+          }
+
+          const payload: SnowflakeQueryResult = {
+            queryId: stmt && typeof stmt.getStatementId === 'function' ? stmt.getStatementId() : 'UNKNOWN',
+            sessionId: safeConnection.getId ? safeConnection.getId() : undefined,
+            sqlText,
+            rows: rows ?? [],
+            rowCount: rows?.length ?? 0,
+            defaultContext: buildDefaultContext(safeConnection)
+          };
+
+          safeConnection.destroy((destroyErr?: SnowflakeError | null) => {
+            if (destroyErr) {
+              console.warn('Failed to close Snowflake connection cleanly after runSql:', destroyErr);
+            }
+            resolve(payload);
+          });
+        }
+      });
     });
   });
 }

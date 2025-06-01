@@ -1,5 +1,5 @@
 import snowflake from 'snowflake-sdk';
-import { getSnowflakeConnection, SnowflakeConnectionResult } from '../src/connection';
+import { getSnowflakeConnection, runSql, SnowflakeConnectionResult } from '../src/connection';
 
 jest.mock('snowflake-sdk', () => {
   const createConnection = jest.fn();
@@ -10,16 +10,24 @@ const mockedCreateConnection = snowflake.createConnection as jest.Mock;
 
 const originalEnv = { ...process.env };
 
+const HEALTH_SQL = 'select current_timestamp() as server_time, current_session() as session_id';
+
 const buildFakeConnection = ({
   serverTime = '2025-11-08 12:00:00.000 +0000',
-  failServerTime = false
+  failServerTime = false,
+  queryRows = [{ CURRENT_USER: 'MARCELINO_J' }]
 } = {}) => {
+  const fakeStatement = { getStatementId: jest.fn(() => 'MOCK_QUERY_ID') };
   const fakeConnection: any = {
-    execute: jest.fn(({ complete }: any) => {
-      if (failServerTime) {
-        complete(new Error('boom'), null, undefined);
+    execute: jest.fn(({ sqlText, complete }: any) => {
+      if (sqlText === HEALTH_SQL) {
+        if (failServerTime) {
+          complete(new Error('boom'), null, undefined);
+        } else {
+          complete(null, null, [{ SERVER_TIME: serverTime, SESSION_ID: 'SESSION123' }]);
+        }
       } else {
-        complete(null, null, [{ SERVER_TIME: serverTime }]);
+        complete(null, fakeStatement, queryRows);
       }
     }),
     destroy: jest.fn((cb?: (err?: Error | null) => void) => cb && cb()),
@@ -171,5 +179,28 @@ describe('getSnowflakeConnection', () => {
     });
 
     expect(result.debugLog?.some((entry: string) => entry.includes('Initializing Snowflake connection'))).toBe(true);
+  });
+});
+
+describe('runSql', () => {
+  it('returns rows and metadata', async () => {
+    const fakeConnection = buildFakeConnection();
+    mockedCreateConnection.mockReturnValue(fakeConnection);
+
+    const result = await runSql('select current_user()', {
+      account: 'myaccount',
+      username: 'dummy',
+      password: 'secret',
+      role: 'DEV_ROLE'
+    });
+
+    expect(result.queryId).toBe('MOCK_QUERY_ID');
+    expect(result.sessionId).toBe('ABC123');
+    expect(result.rows).toEqual([{ CURRENT_USER: 'MARCELINO_J' }]);
+    expect(result.rowCount).toBe(1);
+    expect(fakeConnection.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ sqlText: 'select current_user()' })
+    );
+    expect(fakeConnection.destroy).toHaveBeenCalled();
   });
 });
