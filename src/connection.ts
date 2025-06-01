@@ -227,9 +227,9 @@ export async function getSnowflakeConnection(
           const summary: SnowflakeConnectionResult = {
             status: 'connected',
             connectionId,
-            serverDateTime: health.serverTime,
             sessionId: health.sessionId,
             healthQueryId: health.queryId,
+            serverDateTime: health.serverTime,
             ...(defaultContext
               ? {
                   defaultContext: {
