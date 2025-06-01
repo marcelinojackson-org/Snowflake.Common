@@ -1,0 +1,32 @@
+{
+  "name": "snowflake-common-lib",
+  "version": "1.0.0",
+  "description": "Tiny helper to connect to Snowflake with loud errors",
+  "main": "dist/connection.js",
+  "types": "dist/connection.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "jest",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "snowflake",
+    "sdk",
+    "connection"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "snowflake-sdk": "^2.3.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.4.5"
+  }
+}
