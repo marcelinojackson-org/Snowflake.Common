@@ -102,14 +102,11 @@ describe('getSnowflakeConnection', () => {
       role: 'DEV_ROLE'
     });
 
-    const expectedSummary: SnowflakeConnectionResult = {
-      status: 'connected',
-      connectionId: 'ABC123',
-      serverDateTime: '2025-11-08 12:00:00.000 +0000'
-    };
-
-    expect(result).toEqual(expectedSummary);
-    expect(result).toEqual(expectedSummary);
+    expect(result.status).toBe('connected');
+    expect(result.connectionId).toBe('ABC123');
+    expect(result.serverDateTime).toBe('2025-11-08 12:00:00.000 +0000');
+    expect(result.sessionId).toBeDefined();
+    expect(result.healthQueryId).toBe('UNKNOWN');
     expect(result.debugLog).toBeUndefined();
     expect(logSpy).not.toHaveBeenCalled();
     expect(fakeConnection.execute).toHaveBeenCalledWith(

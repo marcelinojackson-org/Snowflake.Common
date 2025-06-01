@@ -23,6 +23,8 @@ export interface SnowflakeConnectionResult {
   status: 'connected';
   connectionId: string;
   serverDateTime: string;
+  sessionId?: string;
+  healthQueryId?: string;
   defaultContext?: {
     warehouse?: string;
     database?: string;
@@ -93,35 +95,50 @@ function normalizeLogLevel(value: string | undefined): LogLevel {
   return upper === 'VERBOSE' ? 'VERBOSE' : 'MINIMAL';
 }
 
-function fetchServerTime(connection: Connection, logLevel: LogLevel, debugLog: string[]): Promise<string> {
-  const SQL = 'select current_timestamp() as server_time';
+type HealthCheck = {
+  serverTime: string;
+  sessionId: string;
+  queryId: string;
+};
+
+function fetchHealth(connection: Connection, logLevel: LogLevel, debugLog: string[]): Promise<HealthCheck> {
+  const SQL = 'select current_timestamp() as server_time, current_session() as session_id';
   if (logLevel === 'VERBOSE') {
-    debugLog.push(`[VERBOSE] Executing SQL to fetch server timestamp: ${SQL}`);
+    debugLog.push(`[VERBOSE] Executing SQL to fetch server timestamp and session id: ${SQL}`);
   }
 
   return new Promise((resolve, reject) => {
     const options = {
       sqlText: SQL,
-      complete: (err: SnowflakeError | undefined, _stmt: unknown, rows?: Array<Record<string, unknown>>) => {
+      complete: (err: SnowflakeError | undefined, stmt: Connection['execute'] extends (...args: any) => infer R ? R : any, rows?: Array<Record<string, unknown>>) => {
         if (err) {
           return reject(err);
         }
 
         const row = rows && rows[0];
         if (logLevel === 'VERBOSE') {
-          debugLog.push(`[VERBOSE] Snowflake returned server time row: ${JSON.stringify(row)}`);
+          debugLog.push(`[VERBOSE] Snowflake returned health row: ${JSON.stringify(row)}`);
         }
 
         const rawTime = row?.SERVER_TIME ?? row?.server_time ?? row?.SERVER_TIME?.toString?.();
+        const sessionId = row?.SESSION_ID ?? row?.session_id;
+
+        let serverTime = new Date().toISOString();
         if (typeof rawTime === 'string' && rawTime.length > 0) {
-          return resolve(rawTime);
+          serverTime = rawTime;
+        } else if (rawTime && typeof rawTime !== 'string') {
+          serverTime = String(rawTime);
         }
 
-        if (rawTime && typeof rawTime !== 'string') {
-          return resolve(String(rawTime));
-        }
+        const statementId = stmt && typeof (stmt as any).getStatementId === 'function'
+          ? (stmt as any).getStatementId()
+          : 'UNKNOWN';
 
-        return resolve(new Date().toISOString());
+        resolve({
+          serverTime,
+          sessionId: typeof sessionId === 'string' ? sessionId : connection.getId(),
+          queryId: statementId
+        });
       }
     };
 
@@ -185,12 +202,16 @@ export async function getSnowflakeConnection(
       };
       const connectionId = safeConnection.getId ? safeConnection.getId() : accountIdentifier;
 
-      fetchServerTime(safeConnection, config.logLevel, debugLog)
+      fetchHealth(safeConnection, config.logLevel, debugLog)
         .catch((timeErr) => {
           console.warn('Failed to fetch server time, falling back to local clock.', timeErr);
-          return new Date().toISOString();
+          return {
+            serverTime: new Date().toISOString(),
+            sessionId: undefined,
+            queryId: 'UNKNOWN'
+          };
         })
-        .then((serverDateTime) => {
+        .then((health) => {
           if (typeof safeConnection.destroy === 'function') {
             safeConnection.destroy((destroyErr?: SnowflakeError | null) => {
               if (destroyErr) {
@@ -206,7 +227,9 @@ export async function getSnowflakeConnection(
           const summary: SnowflakeConnectionResult = {
             status: 'connected',
             connectionId,
-            serverDateTime,
+            serverDateTime: health.serverTime,
+            sessionId: health.sessionId,
+            healthQueryId: health.queryId,
             ...(defaultContext
               ? {
                   defaultContext: {
