@@ -31,6 +31,7 @@
     "typescript": "^5.4.5"
   },
   "overrides": {
-    "node-domexception": "file:../vendor/node-domexception"
+    "node-domexception": "file:../vendor/node-domexception",
+    "glob": "^10.3.10"
   }
 }
