@@ -22,9 +22,9 @@ interface ResolvedSnowflakeConnectionConfig {
 export interface SnowflakeConnectionResult {
   status: 'connected';
   connectionId: string;
-  serverDateTime: string;
   sessionId?: string;
   healthQueryId?: string;
+  serverDateTime: string;
   defaultContext?: {
     warehouse?: string;
     database?: string;
