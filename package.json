@@ -1,6 +1,6 @@
 {
   "name": "@marcelinojackson-org/snowflake-common",
-  "version": "1.0.3",
+  "version": "0.1.0",
   "description": "Tiny helper to connect to Snowflake with loud errors",
   "main": "dist/connection.js",
   "types": "dist/connection.d.ts",
