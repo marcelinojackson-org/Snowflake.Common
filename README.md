@@ -21,7 +21,7 @@ npm run build
 ## API
 
 ```ts
-import { getSnowflakeConnection } from 'snowflake-common-lib';
+import { getSnowflakeConnection } from '@marcelinojackson-org/snowflake-common';
 
 await getSnowflakeConnection({
   account: 'myaccount',
