@@ -39,4 +39,4 @@ const summary = await getSnowflakeConnection({
 // }
 ```
 
-The helper prints the summary as pretty JSON, fetches `current_timestamp()` from Snowflake for traceability, and rethrows detailed Snowflake error codes on failure.
+When `logLevel` (or `SNOWFLAKE_LOG_LEVEL`) is set to `VERBOSE`, the helper prints detailed logs, including the JSON summary and the `connected to ...` line. When left at `MINIMAL`, it simply returns the summary so callers (like your GitHub Action) can decide how much to display.

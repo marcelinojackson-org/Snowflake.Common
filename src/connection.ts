@@ -171,9 +171,9 @@ export async function getSnowflakeConnection(
 
           if (verbose) {
             console.log('[VERBOSE] Snowflake connection summary:', summary);
+            console.log(JSON.stringify(summary, null, 2));
+            console.log(`connected to ${accountUrl}`);
           }
-          console.log(JSON.stringify(summary, null, 2));
-          console.log(`connected to ${accountUrl}`);
           resolve(summary);
         })
         .catch((timeErr) => reject(timeErr));
