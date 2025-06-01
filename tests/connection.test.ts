@@ -46,4 +46,22 @@ describe('getSnowflakeConnection', () => {
     );
     expect(fakeConnection.connect).toHaveBeenCalled();
   });
+
+  it('normalizes full account URLs with protocol', async () => {
+    const fakeConnection = { id: '456', connect: jest.fn((cb) => cb(null, { id: '456' })) };
+    mockedCreateConnection.mockReturnValue(fakeConnection);
+
+    await getSnowflakeConnection({
+      account: 'https://srsibdn-ura06696.snowflakecomputing.com/',
+      username: 'dummy',
+      password: 'secret',
+      role: 'DEV_ROLE'
+    });
+
+    expect(mockedCreateConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: 'srsibdn-ura06696'
+      })
+    );
+  });
 });

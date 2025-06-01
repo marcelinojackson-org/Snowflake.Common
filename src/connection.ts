@@ -44,12 +44,26 @@ function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeCon
   return { account, username, password, privateKeyPath, role };
 }
 
+function normalizeAccount(account: string): { identifier: string; url: string } {
+  const trimmed = account.trim();
+  const withoutProtocol = trimmed.replace(/^https?:\/\//i, '');
+  const host = withoutProtocol.split('/')[0];
+  const hostWithoutPort = host.split(':')[0];
+  const identifier = hostWithoutPort.replace(/\.snowflakecomputing\.com$/i, '');
+
+  if (!identifier) {
+    throw new Error('Missing Snowflake account - set SNOWFLAKE_ACCOUNT or input it, dummy!');
+  }
+
+  return {
+    identifier,
+    url: `${identifier}.snowflakecomputing.com`
+  };
+}
+
 export async function getSnowflakeConnection(partialConfig: SnowflakeConnectionConfig = {}): Promise<Connection> {
   const config = resolveConfig(partialConfig);
-  const accountIdentifier = config.account.endsWith('.snowflakecomputing.com')
-    ? config.account.replace(/\.snowflakecomputing\.com$/, '')
-    : config.account;
-  const accountUrl = `${accountIdentifier}.snowflakecomputing.com`;
+  const { identifier: accountIdentifier, url: accountUrl } = normalizeAccount(config.account);
 
   const connectionOptions: ConnectionOptions = {
     account: accountIdentifier,
