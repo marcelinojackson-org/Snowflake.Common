@@ -19,6 +19,8 @@ npm run build
 - `SNOWFLAKE_ROLE` – Mandatory role; the helper yells if it is blank
 - `SNOWFLAKE_LOG_LEVEL` – Optional (`MINIMAL` default, set `VERBOSE` for extra connection detail)
 
+> The helper also dials down the Snowflake SDK’s own logging to `ERROR` unless you request `VERBOSE`, so the action stays quiet by default.
+
 ## API
 
 ```ts
@@ -35,8 +37,13 @@ const summary = await getSnowflakeConnection({
 // summary === {
 //   status: 'connected',
 //   connectionId: 'XYZ',
-//   serverDateTime: '2025-01-01 00:00:00.000 +0000'
+//   serverDateTime: '2025-01-01 00:00:00.000 +0000',
+//   debugLog: [
+//     '[VERBOSE] Initializing Snowflake connection with options: ...',
+//     '[VERBOSE] Executing SQL to fetch server timestamp: select current_timestamp() as server_time',
+//     '...'
+//   ]
 // }
 ```
 
-When `logLevel` (or `SNOWFLAKE_LOG_LEVEL`) is set to `VERBOSE`, the helper prints detailed logs, including the JSON summary and the `connected to ...` line. When left at `MINIMAL`, it simply returns the summary so callers (like your GitHub Action) can decide how much to display.
+When `logLevel` (or `SNOWFLAKE_LOG_LEVEL`) is set to `VERBOSE`, the helper includes a `debugLog` array that callers can print. At `MINIMAL`, it quietly returns just the summary so the consumer decides how much to display.

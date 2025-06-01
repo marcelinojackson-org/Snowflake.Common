@@ -22,6 +22,7 @@ export interface SnowflakeConnectionResult {
   status: 'connected';
   connectionId: string;
   serverDateTime: string;
+  debugLog?: string[];
 }
 
 export type LogLevel = 'MINIMAL' | 'VERBOSE';
@@ -55,6 +56,14 @@ function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeCon
   return { account, username, password, privateKeyPath, role, logLevel };
 }
 
+function applySdkLogLevel(level: LogLevel): void {
+  const sdkLevel = level === 'VERBOSE' ? 'DEBUG' : 'ERROR';
+  const configure = (snowflake as unknown as { configure?: (opts: { logLevel: string }) => void }).configure;
+  if (typeof configure === 'function') {
+    configure({ logLevel: sdkLevel });
+  }
+}
+
 function normalizeAccount(account: string): { identifier: string; url: string } {
   const trimmed = account.trim();
   const withoutProtocol = trimmed.replace(/^https?:\/\//i, '');
@@ -77,10 +86,10 @@ function normalizeLogLevel(value: string | undefined): LogLevel {
   return upper === 'VERBOSE' ? 'VERBOSE' : 'MINIMAL';
 }
 
-function fetchServerTime(connection: Connection, logLevel: LogLevel): Promise<string> {
+function fetchServerTime(connection: Connection, logLevel: LogLevel, debugLog: string[]): Promise<string> {
   const SQL = 'select current_timestamp() as server_time';
   if (logLevel === 'VERBOSE') {
-    console.log('[VERBOSE] Executing SQL to fetch server timestamp:', SQL);
+    debugLog.push(`[VERBOSE] Executing SQL to fetch server timestamp: ${SQL}`);
   }
 
   return new Promise((resolve, reject) => {
@@ -93,7 +102,7 @@ function fetchServerTime(connection: Connection, logLevel: LogLevel): Promise<st
 
         const row = rows && rows[0];
         if (logLevel === 'VERBOSE') {
-          console.log('[VERBOSE] Snowflake returned server time row:', row);
+          debugLog.push(`[VERBOSE] Snowflake returned server time row: ${JSON.stringify(row)}`);
         }
 
         const rawTime = row?.SERVER_TIME ?? row?.server_time ?? row?.SERVER_TIME?.toString?.();
@@ -117,6 +126,7 @@ export async function getSnowflakeConnection(
   const config = resolveConfig(partialConfig);
   const { identifier: accountIdentifier, url: accountUrl } = normalizeAccount(config.account);
   const verbose = config.logLevel === 'VERBOSE';
+  const debugLog: string[] = [];
 
   const connectionOptions: ConnectionOptions = {
     account: accountIdentifier,
@@ -127,13 +137,15 @@ export async function getSnowflakeConnection(
   };
 
   if (verbose) {
-    console.log('[VERBOSE] Initializing Snowflake connection with options:', {
+    const sanitized = {
       ...connectionOptions,
       password: connectionOptions.password ? '***redacted***' : undefined,
       privateKeyPath: connectionOptions.privateKeyPath ? '[provided]' : undefined
-    });
+    };
+    debugLog.push(`[VERBOSE] Initializing Snowflake connection with options: ${JSON.stringify(sanitized)}`);
   }
 
+  applySdkLogLevel(config.logLevel);
   const connection = snowflake.createConnection(connectionOptions);
 
   return new Promise((resolve, reject) => {
@@ -149,7 +161,7 @@ export async function getSnowflakeConnection(
       const safeConnection = (conn || connection) as Connection & { getId?: () => string };
       const connectionId = safeConnection.getId ? safeConnection.getId() : accountIdentifier;
 
-      fetchServerTime(safeConnection, config.logLevel)
+      fetchServerTime(safeConnection, config.logLevel, debugLog)
         .catch((timeErr) => {
           console.warn('Failed to fetch server time, falling back to local clock.', timeErr);
           return new Date().toISOString();
@@ -166,14 +178,10 @@ export async function getSnowflakeConnection(
           const summary: SnowflakeConnectionResult = {
             status: 'connected',
             connectionId,
-            serverDateTime
+            serverDateTime,
+            ...(verbose ? { debugLog } : {})
           };
 
-          if (verbose) {
-            console.log('[VERBOSE] Snowflake connection summary:', summary);
-            console.log(JSON.stringify(summary, null, 2));
-            console.log(`connected to ${accountUrl}`);
-          }
           resolve(summary);
         })
         .catch((timeErr) => reject(timeErr));

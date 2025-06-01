@@ -110,10 +110,8 @@ describe('getSnowflakeConnection', () => {
 
     expect(result).toEqual(expectedSummary);
     expect(result).toEqual(expectedSummary);
-    const summaryLogs = logSpy.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && (call[0].includes('connected') || call[0].includes('[VERBOSE]') || call[0].startsWith('{'))
-    );
-    expect(summaryLogs).toHaveLength(0);
+    expect(result.debugLog).toBeUndefined();
+    expect(logSpy).not.toHaveBeenCalled();
     expect(fakeConnection.execute).toHaveBeenCalledWith(
       expect.objectContaining({
         sqlText: expect.stringContaining('current_timestamp')
@@ -151,7 +149,7 @@ describe('getSnowflakeConnection', () => {
     const fakeConnection = buildFakeConnection();
     mockedCreateConnection.mockReturnValue(fakeConnection);
 
-    await getSnowflakeConnection({
+    const result = await getSnowflakeConnection({
       account: 'myaccount',
       username: 'dummy',
       password: 'secret',
@@ -159,12 +157,8 @@ describe('getSnowflakeConnection', () => {
       logLevel: 'VERBOSE'
     });
 
-    const verboseCalls = logSpy.mock.calls.filter((call) => typeof call[0] === 'string' && call[0].includes('[VERBOSE]'));
-    expect(verboseCalls.length).toBeGreaterThan(0);
-    const printedJson = logSpy.mock.calls.some(
-      (call) => typeof call[0] === 'string' && call[0].startsWith('{') && call[0].includes('"status": "connected"')
-    );
-    expect(printedJson).toBe(true);
+    expect(result.debugLog).toBeDefined();
+    expect(result.debugLog?.some((entry: string) => entry.includes('Initializing Snowflake connection'))).toBe(true);
   });
 
   it('derives verbose log level from env var (case-insensitive)', async () => {
@@ -172,16 +166,13 @@ describe('getSnowflakeConnection', () => {
     mockedCreateConnection.mockReturnValue(fakeConnection);
     process.env.SNOWFLAKE_LOG_LEVEL = 'verbose';
 
-    await getSnowflakeConnection({
+    const result = await getSnowflakeConnection({
       account: 'myaccount',
       username: 'dummy',
       password: 'secret',
       role: 'DEV_ROLE'
     });
 
-    const verboseCalls = logSpy.mock.calls.filter(
-      (call) => typeof call[0] === 'string' && call[0].includes('[VERBOSE]')
-    );
-    expect(verboseCalls.length).toBeGreaterThan(0);
+    expect(result.debugLog?.some((entry: string) => entry.includes('Initializing Snowflake connection'))).toBe(true);
   });
 });
