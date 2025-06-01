@@ -23,12 +23,18 @@ npm run build
 ```ts
 import { getSnowflakeConnection } from '@marcelinojackson-org/snowflake-common';
 
-await getSnowflakeConnection({
+const summary = await getSnowflakeConnection({
   account: 'myaccount',
   username: 'ME',
   password: 'super-secret',
   role: 'ACCOUNTADMIN'
 });
+
+// summary === {
+//   status: 'connected',
+//   connectionId: 'XYZ',
+//   serverDateTime: '2025-01-01 00:00:00.000 +0000'
+// }
 ```
 
-The function logs `connected` on success and rethrows detailed Snowflake error codes on failure.
+The helper prints the summary as pretty JSON, fetches `current_timestamp()` from Snowflake for traceability, and rethrows detailed Snowflake error codes on failure.

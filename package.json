@@ -28,5 +28,8 @@
     "jest": "^29.7.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.5"
+  },
+  "overrides": {
+    "node-domexception": "file:../vendor/node-domexception"
   }
 }

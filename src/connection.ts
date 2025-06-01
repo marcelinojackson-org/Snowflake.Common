@@ -16,6 +16,12 @@ interface ResolvedSnowflakeConnectionConfig {
   privateKeyPath?: string;
 }
 
+export interface SnowflakeConnectionResult {
+  status: 'connected';
+  connectionId: string;
+  serverDateTime: string;
+}
+
 const ROLE_ERROR = 'Missing Snowflake ROLE-set SNOWFLAKE_ROLE or input it, dummy!';
 
 function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeConnectionConfig {
@@ -61,7 +67,35 @@ function normalizeAccount(account: string): { identifier: string; url: string } 
   };
 }
 
-export async function getSnowflakeConnection(partialConfig: SnowflakeConnectionConfig = {}): Promise<Connection> {
+function fetchServerTime(connection: Connection): Promise<string> {
+  const SQL = 'select current_timestamp() as server_time';
+  return new Promise((resolve, reject) => {
+    connection.execute({
+      sqlText: SQL,
+      complete: (err, _stmt, rows) => {
+        if (err) {
+          return reject(err);
+        }
+
+        const row = rows && rows[0];
+        const rawTime = row?.SERVER_TIME ?? row?.server_time ?? row?.SERVER_TIME?.toString?.();
+        if (typeof rawTime === 'string' && rawTime.length > 0) {
+          return resolve(rawTime);
+        }
+
+        if (rawTime && typeof rawTime !== 'string') {
+          return resolve(String(rawTime));
+        }
+
+        return resolve(new Date().toISOString());
+      }
+    });
+  });
+}
+
+export async function getSnowflakeConnection(
+  partialConfig: SnowflakeConnectionConfig = {}
+): Promise<SnowflakeConnectionResult> {
   const config = resolveConfig(partialConfig);
   const { identifier: accountIdentifier, url: accountUrl } = normalizeAccount(config.account);
 
@@ -84,8 +118,34 @@ export async function getSnowflakeConnection(partialConfig: SnowflakeConnectionC
         return reject(err);
       }
 
-      console.log(`connected to ${accountUrl}`);
-      resolve(conn as Connection);
+      const safeConnection = (conn || connection) as Connection & { getId?: () => string };
+      const connectionId = safeConnection.getId ? safeConnection.getId() : accountIdentifier;
+
+      fetchServerTime(safeConnection)
+        .catch((timeErr) => {
+          console.warn('Failed to fetch server time, falling back to local clock.', timeErr);
+          return new Date().toISOString();
+        })
+        .then((serverDateTime) => {
+          if (typeof safeConnection.destroy === 'function') {
+            safeConnection.destroy((destroyErr) => {
+              if (destroyErr) {
+                console.warn('Failed to close Snowflake connection cleanly:', destroyErr);
+              }
+            });
+          }
+
+          const summary: SnowflakeConnectionResult = {
+            status: 'connected',
+            connectionId,
+            serverDateTime
+          };
+
+          console.log(JSON.stringify(summary, null, 2));
+          console.log(`connected to ${accountUrl}`);
+          resolve(summary);
+        })
+        .catch((timeErr) => reject(timeErr));
     });
   });
 }
