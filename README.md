@@ -17,6 +17,7 @@ npm run build
 - `SNOWFLAKE_USER` – Username
 - `SNOWFLAKE_PASSWORD` or `SNOWFLAKE_PRIVATE_KEY_PATH` – One authentication path is required
 - `SNOWFLAKE_ROLE` – Mandatory role; the helper yells if it is blank
+- `SNOWFLAKE_LOG_LEVEL` – Optional (`MINIMAL` default, set `VERBOSE` for extra connection detail)
 
 ## API
 
@@ -27,7 +28,8 @@ const summary = await getSnowflakeConnection({
   account: 'myaccount',
   username: 'ME',
   password: 'super-secret',
-  role: 'ACCOUNTADMIN'
+  role: 'ACCOUNTADMIN',
+  logLevel: 'VERBOSE'
 });
 
 // summary === {

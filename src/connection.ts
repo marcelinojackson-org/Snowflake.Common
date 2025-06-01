@@ -6,6 +6,7 @@ export interface SnowflakeConnectionConfig {
   password?: string;
   privateKeyPath?: string;
   role?: string;
+  logLevel?: LogLevel;
 }
 
 interface ResolvedSnowflakeConnectionConfig {
@@ -14,6 +15,7 @@ interface ResolvedSnowflakeConnectionConfig {
   role: string;
   password?: string;
   privateKeyPath?: string;
+  logLevel: LogLevel;
 }
 
 export interface SnowflakeConnectionResult {
@@ -21,6 +23,8 @@ export interface SnowflakeConnectionResult {
   connectionId: string;
   serverDateTime: string;
 }
+
+export type LogLevel = 'MINIMAL' | 'VERBOSE';
 
 const ROLE_ERROR = 'Missing Snowflake ROLE-set SNOWFLAKE_ROLE or input it, dummy!';
 
@@ -30,6 +34,7 @@ function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeCon
   const password = partial.password ?? process.env.SNOWFLAKE_PASSWORD;
   const privateKeyPath = partial.privateKeyPath ?? process.env.SNOWFLAKE_PRIVATE_KEY_PATH;
   const role = partial.role ?? process.env.SNOWFLAKE_ROLE;
+  const logLevel = normalizeLogLevel(partial.logLevel ?? process.env.SNOWFLAKE_LOG_LEVEL);
 
   if (!account) {
     throw new Error('Missing Snowflake account - set SNOWFLAKE_ACCOUNT or input it, dummy!');
@@ -47,7 +52,7 @@ function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeCon
     throw new Error(ROLE_ERROR);
   }
 
-  return { account, username, password, privateKeyPath, role };
+  return { account, username, password, privateKeyPath, role, logLevel };
 }
 
 function normalizeAccount(account: string): { identifier: string; url: string } {
@@ -67,8 +72,17 @@ function normalizeAccount(account: string): { identifier: string; url: string } 
   };
 }
 
-function fetchServerTime(connection: Connection): Promise<string> {
+function normalizeLogLevel(value: string | undefined): LogLevel {
+  const upper = (value ?? 'MINIMAL').toString().trim().toUpperCase();
+  return upper === 'VERBOSE' ? 'VERBOSE' : 'MINIMAL';
+}
+
+function fetchServerTime(connection: Connection, logLevel: LogLevel): Promise<string> {
   const SQL = 'select current_timestamp() as server_time';
+  if (logLevel === 'VERBOSE') {
+    console.log('[VERBOSE] Executing SQL to fetch server timestamp:', SQL);
+  }
+
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText: SQL,
@@ -78,6 +92,10 @@ function fetchServerTime(connection: Connection): Promise<string> {
         }
 
         const row = rows && rows[0];
+        if (logLevel === 'VERBOSE') {
+          console.log('[VERBOSE] Snowflake returned server time row:', row);
+        }
+
         const rawTime = row?.SERVER_TIME ?? row?.server_time ?? row?.SERVER_TIME?.toString?.();
         if (typeof rawTime === 'string' && rawTime.length > 0) {
           return resolve(rawTime);
@@ -98,6 +116,7 @@ export async function getSnowflakeConnection(
 ): Promise<SnowflakeConnectionResult> {
   const config = resolveConfig(partialConfig);
   const { identifier: accountIdentifier, url: accountUrl } = normalizeAccount(config.account);
+  const verbose = config.logLevel === 'VERBOSE';
 
   const connectionOptions: ConnectionOptions = {
     account: accountIdentifier,
@@ -107,6 +126,14 @@ export async function getSnowflakeConnection(
     ...(config.privateKeyPath ? { privateKeyPath: config.privateKeyPath } : {})
   };
 
+  if (verbose) {
+    console.log('[VERBOSE] Initializing Snowflake connection with options:', {
+      ...connectionOptions,
+      password: connectionOptions.password ? '***redacted***' : undefined,
+      privateKeyPath: connectionOptions.privateKeyPath ? '[provided]' : undefined
+    });
+  }
+
   const connection = snowflake.createConnection(connectionOptions);
 
   return new Promise((resolve, reject) => {
@@ -115,13 +142,14 @@ export async function getSnowflakeConnection(
         const snowflakeError = err as Error & { code?: string };
         const code = snowflakeError.code ?? 'UNKNOWN_CODE';
         console.error(`Snowflake error ${code}: ${snowflakeError.message}`);
+        console.error(err.stack ?? '');
         return reject(err);
       }
 
       const safeConnection = (conn || connection) as Connection & { getId?: () => string };
       const connectionId = safeConnection.getId ? safeConnection.getId() : accountIdentifier;
 
-      fetchServerTime(safeConnection)
+      fetchServerTime(safeConnection, config.logLevel)
         .catch((timeErr) => {
           console.warn('Failed to fetch server time, falling back to local clock.', timeErr);
           return new Date().toISOString();
@@ -141,6 +169,9 @@ export async function getSnowflakeConnection(
             serverDateTime
           };
 
+          if (verbose) {
+            console.log('[VERBOSE] Snowflake connection summary:', summary);
+          }
           console.log(JSON.stringify(summary, null, 2));
           console.log(`connected to ${accountUrl}`);
           resolve(summary);

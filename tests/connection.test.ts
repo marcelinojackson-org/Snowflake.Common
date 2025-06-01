@@ -142,4 +142,40 @@ describe('getSnowflakeConnection', () => {
       expect.any(Error)
     );
   });
+
+  it('emits verbose logs when log level is verbose', async () => {
+    const fakeConnection = buildFakeConnection();
+    mockedCreateConnection.mockReturnValue(fakeConnection);
+
+    await getSnowflakeConnection({
+      account: 'myaccount',
+      username: 'dummy',
+      password: 'secret',
+      role: 'DEV_ROLE',
+      logLevel: 'VERBOSE'
+    });
+
+    const verboseCalls = logSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('[VERBOSE]')
+    );
+    expect(verboseCalls.length).toBeGreaterThan(0);
+  });
+
+  it('derives verbose log level from env var (case-insensitive)', async () => {
+    const fakeConnection = buildFakeConnection();
+    mockedCreateConnection.mockReturnValue(fakeConnection);
+    process.env.SNOWFLAKE_LOG_LEVEL = 'verbose';
+
+    await getSnowflakeConnection({
+      account: 'myaccount',
+      username: 'dummy',
+      password: 'secret',
+      role: 'DEV_ROLE'
+    });
+
+    const verboseCalls = logSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('[VERBOSE]')
+    );
+    expect(verboseCalls.length).toBeGreaterThan(0);
+  });
 });
