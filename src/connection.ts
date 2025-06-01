@@ -23,6 +23,12 @@ export interface SnowflakeConnectionResult {
   status: 'connected';
   connectionId: string;
   serverDateTime: string;
+  defaultContext?: {
+    warehouse?: string;
+    database?: string;
+    schema?: string;
+    role?: string;
+  };
   debugLog?: string[];
 }
 
@@ -149,7 +155,14 @@ export async function getSnowflakeConnection(
   }
 
   applySdkLogLevel(config.logLevel);
-  const connection = snowflake.createConnection(connectionOptions);
+  const connection = snowflake.createConnection(connectionOptions) as Connection & {
+    getSessionState?: () => {
+      currentWarehouse?: string;
+      currentDatabase?: string;
+      currentSchema?: string;
+      currentRole?: string;
+    };
+  };
 
   return new Promise((resolve, reject) => {
     connection.connect((err: SnowflakeError | undefined, conn: Connection | undefined) => {
@@ -161,7 +174,15 @@ export async function getSnowflakeConnection(
         return reject(err);
       }
 
-      const safeConnection = (conn || connection) as Connection & { getId?: () => string };
+      const safeConnection = (conn || connection) as Connection & {
+        getId?: () => string;
+        getSessionState?: () => {
+          currentWarehouse?: string;
+          currentDatabase?: string;
+          currentSchema?: string;
+          currentRole?: string;
+        };
+      };
       const connectionId = safeConnection.getId ? safeConnection.getId() : accountIdentifier;
 
       fetchServerTime(safeConnection, config.logLevel, debugLog)
@@ -178,10 +199,24 @@ export async function getSnowflakeConnection(
             });
           }
 
+          const defaultContext = typeof safeConnection.getSessionState === 'function'
+            ? safeConnection.getSessionState()
+            : undefined;
+
           const summary: SnowflakeConnectionResult = {
             status: 'connected',
             connectionId,
             serverDateTime,
+            ...(defaultContext
+              ? {
+                  defaultContext: {
+                    warehouse: defaultContext.currentWarehouse,
+                    database: defaultContext.currentDatabase,
+                    schema: defaultContext.currentSchema,
+                    role: defaultContext.currentRole
+                  }
+                }
+              : {}),
             ...(verbose ? { debugLog } : {})
           };
 
