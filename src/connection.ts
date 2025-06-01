@@ -1,4 +1,5 @@
-import snowflake, { Connection, ConnectionOptions } from 'snowflake-sdk';
+import snowflake from 'snowflake-sdk';
+import type { Connection, ConnectionOptions, SnowflakeError } from 'snowflake-sdk';
 
 export interface SnowflakeConnectionConfig {
   account?: string;
@@ -93,9 +94,9 @@ function fetchServerTime(connection: Connection, logLevel: LogLevel, debugLog: s
   }
 
   return new Promise((resolve, reject) => {
-    connection.execute({
+    const options = {
       sqlText: SQL,
-      complete: (err, _stmt, rows) => {
+      complete: (err: SnowflakeError | undefined, _stmt: unknown, rows?: Array<Record<string, unknown>>) => {
         if (err) {
           return reject(err);
         }
@@ -116,7 +117,9 @@ function fetchServerTime(connection: Connection, logLevel: LogLevel, debugLog: s
 
         return resolve(new Date().toISOString());
       }
-    });
+    };
+
+    connection.execute(options);
   });
 }
 
@@ -149,7 +152,7 @@ export async function getSnowflakeConnection(
   const connection = snowflake.createConnection(connectionOptions);
 
   return new Promise((resolve, reject) => {
-    connection.connect((err, conn) => {
+    connection.connect((err: SnowflakeError | undefined, conn: Connection | undefined) => {
       if (err) {
         const snowflakeError = err as Error & { code?: string };
         const code = snowflakeError.code ?? 'UNKNOWN_CODE';
@@ -168,7 +171,7 @@ export async function getSnowflakeConnection(
         })
         .then((serverDateTime) => {
           if (typeof safeConnection.destroy === 'function') {
-            safeConnection.destroy((destroyErr) => {
+            safeConnection.destroy((destroyErr?: SnowflakeError | null) => {
               if (destroyErr) {
                 console.warn('Failed to close Snowflake connection cleanly:', destroyErr);
               }
