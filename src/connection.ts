@@ -8,6 +8,9 @@ export interface SnowflakeConnectionConfig {
   privateKeyPath?: string;
   role?: string;
   logLevel?: LogLevel;
+  warehouse?: string;
+  database?: string;
+  schema?: string;
 }
 
 interface ResolvedSnowflakeConnectionConfig {
@@ -17,6 +20,9 @@ interface ResolvedSnowflakeConnectionConfig {
   password?: string;
   privateKeyPath?: string;
   logLevel: LogLevel;
+  warehouse?: string;
+  database?: string;
+  schema?: string;
 }
 
 type ExtendedConnection = Connection & {
@@ -62,6 +68,9 @@ function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeCon
   const privateKeyPath = partial.privateKeyPath ?? process.env.SNOWFLAKE_PRIVATE_KEY_PATH;
   const role = partial.role ?? process.env.SNOWFLAKE_ROLE;
   const logLevel = normalizeLogLevel(partial.logLevel ?? process.env.SNOWFLAKE_LOG_LEVEL);
+  const warehouse = partial.warehouse ?? process.env.SNOWFLAKE_WAREHOUSE;
+  const database = partial.database ?? process.env.SNOWFLAKE_DATABASE;
+  const schema = partial.schema ?? process.env.SNOWFLAKE_SCHEMA;
 
   if (!account) {
     throw new Error('Missing Snowflake account - set SNOWFLAKE_ACCOUNT or input it, dummy!');
@@ -79,7 +88,7 @@ function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeCon
     throw new Error(ROLE_ERROR);
   }
 
-  return { account, username, password, privateKeyPath, role, logLevel };
+  return { account, username, password, privateKeyPath, role, logLevel, warehouse, database, schema };
 }
 
 function applySdkLogLevel(level: LogLevel): void {
@@ -110,6 +119,13 @@ function normalizeAccount(account: string): { identifier: string; url: string } 
 function normalizeLogLevel(value: string | undefined): LogLevel {
   const upper = (value ?? 'MINIMAL').toString().trim().toUpperCase();
   return upper === 'VERBOSE' ? 'VERBOSE' : 'MINIMAL';
+}
+
+function quoteIdentifier(value: string): string {
+  if (/^[A-Za-z_][A-Za-z0-9_$]*$/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function createConnectionContext(partialConfig: SnowflakeConnectionConfig) {
@@ -214,7 +230,8 @@ export async function withSnowflakeConnection<T>(
 
       const safeConnection = (conn || connection) as ExtendedConnection;
 
-      Promise.resolve(fn(safeConnection, context))
+      applyDesiredContext(safeConnection, context.config, context.debugLog)
+        .then(() => Promise.resolve(fn(safeConnection, context)))
         .then((result) => {
           safeConnection.destroy((destroyErr?: SnowflakeError | null) => {
             if (destroyErr) {
@@ -226,6 +243,48 @@ export async function withSnowflakeConnection<T>(
         .catch((fnErr) => {
           safeConnection.destroy(() => reject(fnErr));
         });
+    });
+  });
+}
+
+async function applyDesiredContext(
+  connection: ExtendedConnection,
+  config: ResolvedSnowflakeConnectionConfig,
+  debugLog: string[]
+): Promise<void> {
+  const statements: string[] = [];
+
+  if (config.role) {
+    statements.push(`use role ${quoteIdentifier(config.role)}`);
+  }
+  if (config.warehouse) {
+    statements.push(`use warehouse ${quoteIdentifier(config.warehouse)}`);
+  }
+  if (config.database) {
+    statements.push(`use database ${quoteIdentifier(config.database)}`);
+  }
+  if (config.schema) {
+    statements.push(`use schema ${quoteIdentifier(config.schema)}`);
+  }
+
+  for (const sql of statements) {
+    if (config.logLevel === 'VERBOSE') {
+      debugLog.push(`[VERBOSE] Executing context SQL: ${sql}`);
+    }
+    await executeStatement(connection, sql);
+  }
+}
+
+function executeStatement(connection: ExtendedConnection, sqlText: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    connection.execute({
+      sqlText,
+      complete: (err: SnowflakeError | undefined) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve();
+      }
     });
   });
 }
