@@ -1,12 +1,3 @@
-if (!globalThis.DOMException) {
-  class MinimalDOMException extends Error {
-    constructor(message = '', name = 'DOMException') {
-      super(message);
-      this.name = name;
-    }
-  }
+const { DOMException } = require('node:buffer');
 
-  globalThis.DOMException = MinimalDOMException;
-}
-
-module.exports = globalThis.DOMException;
+module.exports = DOMException;
