@@ -94,6 +94,43 @@ export interface CortexSearchResult {
   response: unknown;
 }
 
+export interface CortexAnalystTextContent {
+  type: 'text';
+  text: string;
+}
+
+export interface CortexAnalystMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: CortexAnalystTextContent[];
+}
+
+export interface CortexAnalystParams {
+  semanticModelPath?: string;
+  semanticViewPath?: string;
+  messages: CortexAnalystMessage[];
+  includeSql?: boolean | string;
+  resultFormat?: string;
+  temperature?: number | string;
+  maxOutputTokens?: number | string;
+  accountUrl?: string;
+  accessToken?: string;
+}
+
+export interface CortexAnalystResult {
+  status: 'success';
+  httpStatus: number;
+  request: {
+    semanticModelPath?: string;
+    semanticViewPath?: string;
+    includeSql?: boolean;
+    resultFormat?: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+    messages: CortexAnalystMessage[];
+  };
+  response: unknown;
+}
+
 const ROLE_ERROR = 'Missing Snowflake ROLE-set SNOWFLAKE_ROLE or input it, dummy!';
 
 function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeConnectionConfig {
@@ -493,6 +530,86 @@ export async function runCortexSearch(params: CortexSearchParams): Promise<Corte
   };
 }
 
+export async function runCortexAnalyst(params: CortexAnalystParams): Promise<CortexAnalystResult> {
+  const semanticModelPath = params.semanticModelPath?.trim();
+  const semanticViewPath = params.semanticViewPath?.trim();
+  if (!semanticModelPath && !semanticViewPath) {
+    throw new Error('Provide either semantic model path or semantic view path.');
+  }
+  if (semanticModelPath && semanticViewPath) {
+    throw new Error('Provide only one of semantic model path or semantic view path, not both.');
+  }
+
+  const messages = validateAnalystMessages(params.messages);
+  const includeSql = normalizeBoolean(params.includeSql);
+  const temperature = normalizeOptionalFloat(params.temperature);
+  const maxOutputTokens = normalizeOptionalInteger(params.maxOutputTokens);
+  const resultFormat = params.resultFormat?.trim();
+  const { accountUrl, accessToken } = resolveAccountContext(params.accountUrl, params.accessToken);
+  const endpoint = new URL('/api/v2/cortex/analyst/message', accountUrl);
+
+  const payload: Record<string, unknown> = {
+    messages
+  };
+
+  if (semanticModelPath) {
+    payload.semantic_model_file = semanticModelPath;
+  }
+  if (semanticViewPath) {
+    payload.semantic_view = semanticViewPath;
+  }
+
+  if (typeof includeSql === 'boolean') {
+    payload.include_sql = includeSql;
+  }
+
+  if (resultFormat) {
+    payload.result_format = resultFormat;
+  }
+
+  if (typeof temperature === 'number') {
+    payload.temperature = temperature;
+  }
+
+  if (typeof maxOutputTokens === 'number') {
+    payload.max_output_tokens = maxOutputTokens;
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json'
+  };
+
+  const response = await postJson(endpoint, JSON.stringify(payload), headers);
+  const parsedBody = safeParseJson(response.body);
+
+  if (response.status < 200 || response.status >= 300) {
+    const message =
+      (parsedBody && typeof parsedBody === 'object' && 'message' in parsedBody && (parsedBody as any).message) ||
+      `Cortex Analyst request failed with status ${response.status}`;
+    const error = new Error(String(message));
+    (error as Error & { status?: number; details?: unknown }).status = response.status;
+    (error as Error & { status?: number; details?: unknown }).details = parsedBody ?? response.body;
+    throw error;
+  }
+
+  return {
+    status: 'success',
+    httpStatus: response.status,
+    request: {
+      ...(semanticModelPath ? { semanticModelPath } : {}),
+      ...(semanticViewPath ? { semanticViewPath } : {}),
+      ...(typeof includeSql === 'boolean' ? { includeSql } : {}),
+      ...(resultFormat ? { resultFormat } : {}),
+      ...(typeof temperature === 'number' ? { temperature } : {}),
+      ...(typeof maxOutputTokens === 'number' ? { maxOutputTokens } : {}),
+      messages
+    },
+    response: parsedBody
+  };
+}
+
 function clampSearchLimit(limit?: number): number {
   if (typeof limit !== 'number' || Number.isNaN(limit) || limit <= 0) {
     return 3;
@@ -577,7 +694,7 @@ function postJson(url: URL, body: string, headers: Record<string, string>): Prom
       {
         method: 'POST',
         headers: {
-          'User-Agent': headers['User-Agent'] ?? 'Snowflake.CortexAI.SearchAction/1.0',
+          'User-Agent': headers['User-Agent'] ?? 'Snowflake.CortexAI.Actions/1.0',
           ...headers
         }
       },
@@ -681,4 +798,47 @@ function normalizeScoreThreshold(value?: number | string): number | undefined {
     throw new Error('SEARCH_SCORE_THRESHOLD must be numeric.');
   }
   return parsed;
+}
+
+function normalizeOptionalNumber(value?: number | string): number | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (Number.isNaN(parsed)) {
+    throw new Error('Value must be numeric.');
+  }
+  return parsed;
+}
+
+function normalizeOptionalFloat(value?: number | string): number | undefined {
+  return normalizeOptionalNumber(value);
+}
+
+function normalizeOptionalInteger(value?: number | string): number | undefined {
+  const parsed = normalizeOptionalNumber(value);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
+function validateAnalystMessages(messages: CortexAnalystMessage[] | undefined): CortexAnalystMessage[] {
+  if (!messages || messages.length === 0) {
+    throw new Error('Cortex Analyst messages array cannot be empty.');
+  }
+
+  messages.forEach((message, index) => {
+    if (!message.role || !message.content || message.content.length === 0) {
+      throw new Error(`Cortex Analyst message at index ${index} is missing role or content.`);
+    }
+    message.content.forEach((item, contentIndex) => {
+      if (item.type !== 'text' || typeof item.text !== 'string' || item.text.trim().length === 0) {
+        throw new Error(`Cortex Analyst message content at index ${index}/${contentIndex} must be text.`);
+      }
+    });
+  });
+
+  return messages;
 }
