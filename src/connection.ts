@@ -577,7 +577,7 @@ function postJson(url: URL, body: string, headers: Record<string, string>): Prom
       {
         method: 'POST',
         headers: {
-          'User-Agent': headers['User-Agent'] ?? 'Snowflake.CortexAI.Search/1.0',
+          'User-Agent': headers['User-Agent'] ?? 'Snowflake.CortexAI.SearchAction/1.0',
           ...headers
         }
       },
