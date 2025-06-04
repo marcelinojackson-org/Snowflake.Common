@@ -1,5 +1,5 @@
 import snowflake from 'snowflake-sdk';
-import { getSnowflakeConnection, runSql, SnowflakeConnectionResult } from '../src/connection';
+import { getSnowflakeConnection, runSql, SnowflakeConnectionResult, __testHooks } from '../src/connection';
 
 jest.mock('snowflake-sdk', () => {
   const createConnection = jest.fn();
@@ -202,5 +202,57 @@ describe('runSql', () => {
       expect.objectContaining({ sqlText: 'select current_user()' })
     );
     expect(fakeConnection.destroy).toHaveBeenCalled();
+  });
+});
+
+describe('Cortex Agent helpers', () => {
+  const { parseSseEvents, validateAgentMessages } = __testHooks;
+
+  it('parses SSE payloads into events', () => {
+    const payload = [
+      'event: response.status',
+      'data: {"status":"planning"}',
+      '',
+      'event: response',
+      'data: {"role":"assistant","content":[{"type":"text","text":"Hi"}]}',
+      ''
+    ].join('\n');
+
+    const events = parseSseEvents(payload);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual({
+      event: 'response.status',
+      data: '{"status":"planning"}',
+      raw: expect.any(String)
+    });
+    expect(events[1].event).toBe('response');
+  });
+
+  it('validates agent messages', () => {
+    const sanitized = validateAgentMessages([
+      {
+        role: ' user ',
+        content: [
+          {
+            type: 'text',
+            text: 'Hello'
+          }
+        ]
+      }
+    ]);
+
+    expect(sanitized[0].role).toBe('user');
+  });
+
+  it('throws when agent messages are invalid', () => {
+    expect(() => validateAgentMessages([] as any)).toThrow('Cortex Agent messages array cannot be empty.');
+    expect(() =>
+      validateAgentMessages([
+        {
+          role: '',
+          content: []
+        }
+      ] as any)
+    ).toThrow(/missing role/);
   });
 });

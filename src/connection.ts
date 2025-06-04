@@ -131,6 +131,54 @@ export interface CortexAnalystResult {
   response: unknown;
 }
 
+export interface CortexAgentMessageContent {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface CortexAgentMessage {
+  role: string;
+  content: CortexAgentMessageContent[];
+}
+
+export interface CortexAgentToolChoice {
+  type?: string;
+  name?: string | string[];
+  [key: string]: unknown;
+}
+
+export interface CortexAgentParams {
+  database: string;
+  schema: string;
+  agentName: string;
+  messages: CortexAgentMessage[];
+  threadId?: number | string;
+  parentMessageId?: number | string;
+  toolChoice?: CortexAgentToolChoice | string;
+  accountUrl?: string;
+  accessToken?: string;
+}
+
+export interface CortexAgentResult {
+  status: 'success';
+  httpStatus: number;
+  request: {
+    database: string;
+    schema: string;
+    agentName: string;
+    threadId?: number;
+    parentMessageId?: number;
+    toolChoice?: Record<string, unknown>;
+    messageCount: number;
+  };
+  response?: unknown;
+  events: Array<{
+    event: string;
+    data: unknown;
+  }>;
+  rawResponse: string;
+}
+
 const ROLE_ERROR = 'Missing Snowflake ROLE-set SNOWFLAKE_ROLE or input it, dummy!';
 
 function resolveConfig(partial: SnowflakeConnectionConfig): ResolvedSnowflakeConnectionConfig {
@@ -610,6 +658,88 @@ export async function runCortexAnalyst(params: CortexAnalystParams): Promise<Cor
   };
 }
 
+export async function runCortexAgent(params: CortexAgentParams): Promise<CortexAgentResult> {
+  const database = params.database?.trim();
+  const schema = params.schema?.trim();
+  const agentName = params.agentName?.trim();
+
+  if (!database) {
+    throw new Error('Cortex Agent database is required.');
+  }
+  if (!schema) {
+    throw new Error('Cortex Agent schema is required.');
+  }
+  if (!agentName) {
+    throw new Error('Cortex Agent name is required.');
+  }
+
+  const messages = validateAgentMessages(params.messages);
+  const threadId = normalizeOptionalInteger(params.threadId);
+  const parentMessageId = normalizeOptionalInteger(params.parentMessageId);
+  const toolChoice = normalizeToolChoice(params.toolChoice);
+
+  const { accountUrl, accessToken } = resolveAccountContext(params.accountUrl, params.accessToken);
+  const endpoint = new URL(
+    `/api/v2/databases/${encodeURIComponent(database)}/schemas/${encodeURIComponent(schema)}/agents/${encodeURIComponent(agentName)}:run`,
+    accountUrl
+  );
+
+  const payload: Record<string, unknown> = {
+    messages
+  };
+
+  if (typeof threadId === 'number') {
+    payload.thread_id = threadId;
+  }
+  if (typeof parentMessageId === 'number') {
+    payload.parent_message_id = parentMessageId;
+  }
+  if (toolChoice) {
+    payload.tool_choice = toolChoice;
+  }
+
+  const { status, body, events } = await postSse(endpoint, JSON.stringify(payload), {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream'
+  });
+
+  if (status < 200 || status >= 300) {
+    const parsed = safeParseJson(body);
+    const error = new Error(
+      typeof parsed === 'object' && parsed !== null && 'message' in parsed
+        ? String((parsed as Record<string, unknown>).message)
+        : `Cortex Agent request failed with status ${status}`
+    );
+    (error as Error & { status?: number; details?: unknown }).status = status;
+    (error as Error & { status?: number; details?: unknown }).details = parsed ?? body;
+    throw error;
+  }
+
+  const responseEvent = [...events].reverse().find((event) => event.event === 'response');
+  const responsePayload = responseEvent ? safeParseJson(responseEvent.data) : safeParseJson(body);
+
+  return {
+    status: 'success',
+    httpStatus: status,
+    request: {
+      database,
+      schema,
+      agentName,
+      threadId: typeof threadId === 'number' ? threadId : undefined,
+      parentMessageId: typeof parentMessageId === 'number' ? parentMessageId : undefined,
+      toolChoice: toolChoice as Record<string, unknown> | undefined,
+      messageCount: messages.length
+    },
+    response: responsePayload,
+    events: events.map((event) => ({
+      event: event.event,
+      data: safeParseJson(event.data)
+    })),
+    rawResponse: body
+  };
+}
+
 function clampSearchLimit(limit?: number): number {
   if (typeof limit !== 'number' || Number.isNaN(limit) || limit <= 0) {
     return 3;
@@ -842,3 +972,150 @@ function validateAnalystMessages(messages: CortexAnalystMessage[] | undefined): 
 
   return messages;
 }
+
+interface ParsedSseEvent {
+  event: string;
+  data: string;
+  raw: string;
+}
+
+function normalizeToolChoice(value?: CortexAgentParams['toolChoice']): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') {
+        return parsed as Record<string, unknown>;
+      }
+      throw new Error('tool-choice must be a JSON object.');
+    } catch (err) {
+      throw new Error(`Invalid tool-choice JSON: ${(err as Error).message}`);
+    }
+  }
+
+  if (typeof value === 'object') {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
+}
+
+function validateAgentMessages(messages: CortexAgentMessage[] | undefined): CortexAgentMessage[] {
+  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    throw new Error('Cortex Agent messages array cannot be empty.');
+  }
+
+  return messages.map((message, messageIndex) => {
+    if (!message || typeof message !== 'object') {
+      throw new Error(`Cortex Agent message at index ${messageIndex} must be an object.`);
+    }
+    const role = (message.role ?? '').toString().trim();
+    if (!role) {
+      throw new Error(`Cortex Agent message at index ${messageIndex} is missing role.`);
+    }
+    if (!Array.isArray(message.content) || message.content.length === 0) {
+      throw new Error(`Cortex Agent message at index ${messageIndex} must include content items.`);
+    }
+    message.content.forEach((content, contentIndex) => {
+      if (!content || typeof content !== 'object') {
+        throw new Error(`Cortex Agent content at ${messageIndex}/${contentIndex} must be an object.`);
+      }
+      if (!content.type || typeof content.type !== 'string') {
+        throw new Error(`Cortex Agent content at ${messageIndex}/${contentIndex} is missing type.`);
+      }
+    });
+    return {
+      role,
+      content: message.content
+    };
+  });
+}
+
+function postSse(
+  url: URL,
+  body: string,
+  headers: Record<string, string>
+): Promise<{ status: number; body: string; events: ParsedSseEvent[] }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'User-Agent': headers['User-Agent'] ?? 'Snowflake.CortexAI.Actions/1.0',
+          ...headers
+        }
+      },
+      (res) => {
+        let responseBody = '';
+        res.on('data', (chunk) => {
+          responseBody += chunk;
+        });
+        res.on('end', () => {
+          const contentType = (res.headers['content-type'] ?? '').toString().toLowerCase();
+          const events =
+            contentType.includes('text/event-stream') || responseBody.startsWith('event:')
+              ? parseSseEvents(responseBody)
+              : [];
+          resolve({
+            status: res.statusCode ?? 0,
+            body: responseBody,
+            events
+          });
+        });
+      }
+    );
+
+    req.on('error', (err) => reject(err));
+    req.write(body);
+    req.end();
+  });
+}
+
+function parseSseEvents(payload: string): ParsedSseEvent[] {
+  if (!payload) {
+    return [];
+  }
+
+  const events: ParsedSseEvent[] = [];
+  const blocks = payload.split(/\r?\n\r?\n/);
+  for (const block of blocks) {
+    if (!block.trim()) {
+      continue;
+    }
+
+    const lines = block.split(/\r?\n/);
+    let eventName = 'message';
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        eventName = line.slice(6).trim() || 'message';
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+
+    if (dataLines.length > 0) {
+      events.push({
+        event: eventName,
+        data: dataLines.join('\n'),
+        raw: block
+      });
+    }
+  }
+
+  return events;
+}
+
+export const __testHooks = {
+  parseSseEvents,
+  validateAgentMessages
+};
